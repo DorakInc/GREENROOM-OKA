@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.astro/
+.DS_Store
+.claude/
+NOTES-INTERNES.md
+COMPTE-RENDU.md
+.env
+.env.*
+!.env.example
+AVANCEMENT-VITRINE.md
+.wrangler/
