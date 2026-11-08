@@ -127,7 +127,12 @@ function liveShop(lang: string): ShopApi {
   const toSession = async (sb: SupabaseClient, uid: string, email: string): Promise<Session | null> => {
     const { data, error } = await sb.from('customers').select('first_name, last_name').eq('id', uid).maybeSingle();
     fail(error);
-    return data ? { email, first: data.first_name, last: data.last_name } : null;
+    if (data) return { email, first: data.first_name, last: data.last_name };
+    // Compte sans fiche (créé avant le déclencheur) : on la crée au vol plutôt que de refuser la connexion.
+    const made = await sb.rpc('ensure_profile');
+    fail(made.error);
+    const c = made.data as { first_name: string; last_name: string } | null;
+    return c ? { email, first: c.first_name, last: c.last_name } : null;
   };
 
   return {

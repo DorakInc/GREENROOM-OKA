@@ -145,6 +145,35 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- Filet de sécurité : crée la fiche d'un compte qui n'en a pas (compte créé avant le déclencheur, par exemple
+-- depuis le tableau de bord). Appelée par le site à la connexion, donc ces comptes fonctionnent quand même.
+create or replace function public.ensure_profile()
+returns public.customers
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  u public.customers;
+  a auth.users;
+begin
+  if auth.uid() is null then
+    raise exception 'not_authenticated';
+  end if;
+  select * into a from auth.users where id = auth.uid();
+  insert into public.customers (id, email, first_name, last_name)
+  values (
+    a.id,
+    lower(a.email),
+    left(btrim(coalesce(a.raw_user_meta_data ->> 'first_name', '')), 60),
+    left(btrim(coalesce(a.raw_user_meta_data ->> 'last_name', '')), 60)
+  )
+  on conflict (id) do nothing;
+  select * into u from public.customers where id = auth.uid();
+  return u;
+end;
+$$;
+
 -- p_items : [{ "id": "baguette", "qty": 2 }, ...]. Vérifie le stock, le réserve et crée la commande en un seul geste.
 create or replace function public.place_order(p_items jsonb, p_note text default '')
 returns public.orders
@@ -279,10 +308,12 @@ end;
 $$;
 
 -- Seuls les utilisateurs connectés peuvent appeler ces fonctions.
+revoke all on function public.ensure_profile()              from public, anon;
 revoke all on function public.place_order(jsonb, text)      from public, anon;
 revoke all on function public.cancel_my_order(uuid)         from public, anon;
 revoke all on function public.set_order_status(uuid, text)  from public, anon;
 revoke all on function public.is_staff()                    from public, anon;
+grant execute on function public.ensure_profile()             to authenticated;
 grant execute on function public.place_order(jsonb, text)     to authenticated;
 grant execute on function public.cancel_my_order(uuid)        to authenticated;
 grant execute on function public.set_order_status(uuid, text) to authenticated;
@@ -377,3 +408,15 @@ $$;
 
 revoke all on function public.delete_my_account() from public, anon;
 grant execute on function public.delete_my_account() to authenticated;
+
+-- ---------- Rattrapage ----------
+-- Fiche client pour les comptes qui existaient déjà avant le déclencheur.
+insert into public.customers (id, email, first_name, last_name)
+select u.id,
+       lower(u.email),
+       left(btrim(coalesce(u.raw_user_meta_data ->> 'first_name', '')), 60),
+       left(btrim(coalesce(u.raw_user_meta_data ->> 'last_name', '')), 60)
+  from auth.users u
+ where u.email is not null
+   and not exists (select 1 from public.customers c where c.id = u.id)
+on conflict do nothing;
